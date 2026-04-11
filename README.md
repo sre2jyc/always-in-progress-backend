@@ -458,7 +458,7 @@ Structured logs (key=value or JSON) are machine-parseable — they flow naturall
 ### One-Command Setup
 
 ```bash
-git clone https://github.com/<your-username>/taskflow-sreejit-chaudhury.git
+git clone https://github.com/sre2jyc/taskflow-sreejit-chaudhury.git
 cd taskflow-sreejit-chaudhury
 
 cp .env.example .env
@@ -470,7 +470,7 @@ docker compose up --build
 
 | Service | Address |
 |---|---|
-| REST API | `http://localhost:8081` |
+| REST API | `http://localhost:8080` |
 | PostgreSQL | `localhost:5433` |
 
 ### Environment Variables
