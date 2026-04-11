@@ -1,0 +1,17 @@
+# Maven
+target/
+*.log
+
+# IntelliJ / VS Code
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+
+# Env files
+.env
+
+# Docker volumes (optional)
+pgdata/

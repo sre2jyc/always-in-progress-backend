@@ -1,0 +1,3 @@
+ALTER TABLE tasks
+DROP COLUMN IF EXISTS version,
+DROP COLUMN IF EXISTS updated_at;

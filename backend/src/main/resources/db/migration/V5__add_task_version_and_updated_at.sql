@@ -1,0 +1,7 @@
+ALTER TABLE tasks
+ADD COLUMN IF NOT EXISTS version BIGINT DEFAULT 0 NOT NULL,
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
+
+UPDATE tasks
+SET updated_at = created_at
+WHERE updated_at IS NULL;
