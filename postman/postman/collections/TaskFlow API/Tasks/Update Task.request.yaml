@@ -1,0 +1,14 @@
+$kind: http-request
+url: "{{baseUrl}}/tasks/{{taskId}}"
+method: PATCH
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{authToken}}
+body:
+  type: text
+  content: |-
+    {
+      "status": "DONE",
+      "priority": "LOW"
+    }
+order: 3000

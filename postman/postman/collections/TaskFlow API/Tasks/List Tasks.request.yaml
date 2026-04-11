@@ -1,0 +1,9 @@
+$kind: http-request
+url: "{{baseUrl}}/projects/{{projectId}}/tasks?page=0&limit=10"
+method: GET
+headers:
+  Authorization: Bearer {{authToken}}
+queryParams:
+  page: "0"
+  limit: "10"
+order: 1000

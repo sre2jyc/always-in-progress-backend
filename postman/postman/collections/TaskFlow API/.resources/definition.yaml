@@ -1,0 +1,8 @@
+$kind: collection
+name: TaskFlow API
+description: Postman collection for TaskFlow backend API.
+variables:
+  baseUrl: ""
+  authToken: ""
+  projectId: ""
+  taskId: ""

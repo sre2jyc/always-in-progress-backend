@@ -45,7 +45,12 @@ public class AuthService {
 
         log.info("User registered | userId={} email={}", user.getId(), user.getEmail());
 
-        return Map.of("message", "User registered successfully");
+        return Map.of(
+                "message", "User registered successfully",
+                "userId", user.getId().toString(),
+                "email", user.getEmail(),
+                "name", user.getName()
+        );
     }
 
     // LOGIN
@@ -67,6 +72,11 @@ public class AuthService {
 
         log.info("User login successful | userId={} email={}", user.getId(), user.getEmail());
 
-        return Map.of("token", token);
+        return Map.of(
+                "token", token,
+                "userId", user.getId().toString(),
+                "email", user.getEmail(),
+                "name", user.getName()
+        );
     }
 }

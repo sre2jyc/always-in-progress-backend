@@ -1,0 +1,10 @@
+$kind: http-request
+url: "{{baseUrl}}/projects/{{projectId}}/tasks?status=TODO&page=0&limit=10"
+method: GET
+headers:
+  Authorization: Bearer {{authToken}}
+queryParams:
+  status: TODO
+  page: "0"
+  limit: "10"
+order: 5000

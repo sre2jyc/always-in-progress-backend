@@ -1,0 +1,11 @@
+$kind: http-request
+url: "{{baseUrl}}/projects/{{projectId}}/events"
+method: GET
+headers:
+  Authorization: Bearer {{authToken}}
+scripts:
+  - type: beforeRequest
+    code: "// Note: Postman does not reliably stream SSE responses. Use curl or
+      browser for live event testing."
+    language: text/javascript
+order: 1000

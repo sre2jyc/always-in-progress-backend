@@ -1,0 +1,11 @@
+$kind: http-request
+url: "{{baseUrl}}/projects/{{projectId}}/tasks?assignee={{assigneeId}}&page=0&l\
+  imit=10"
+method: GET
+headers:
+  Authorization: Bearer {{authToken}}
+queryParams:
+  assignee: "{{assigneeId}}"
+  page: "0"
+  limit: "10"
+order: 6000

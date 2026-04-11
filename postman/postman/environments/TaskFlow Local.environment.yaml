@@ -1,0 +1,17 @@
+name: TaskFlow Local
+values:
+  - key: baseUrl
+    value: 'http://localhost:8080'
+    enabled: true
+  - key: authToken
+    value: ''
+    enabled: true
+  - key: projectId
+    value: ''
+    enabled: true
+  - key: taskId
+    value: ''
+    enabled: true
+  - key: assigneeId
+    value: ''
+    enabled: true

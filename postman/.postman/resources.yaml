@@ -1,0 +1,13 @@
+# Use this workspace to collaborate
+workspace:
+  id: 01190fde-3e3b-457f-8924-9306ba3a3c39
+
+localResources:
+  collections:
+    - ../TaskFlow.postman_collection.json
+  environments:
+    - ../TaskFlow.postman_environment.json
+
+cloudResources:
+  collections:
+    ../postman/collections/TaskFlow API: fc9b90d4-8542-45dc-bf98-8030f6b90b8e

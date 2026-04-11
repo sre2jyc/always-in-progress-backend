@@ -1,0 +1,14 @@
+$kind: http-request
+url: "{{baseUrl}}/projects"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{authToken}}
+body:
+  type: text
+  content: |-
+    {
+      "name": "Project Alpha",
+      "description": "Testing project"
+    }
+order: 2000

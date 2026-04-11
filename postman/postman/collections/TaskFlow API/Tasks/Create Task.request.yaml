@@ -1,0 +1,19 @@
+$kind: http-request
+name: Create Task
+url: "{{baseUrl}}/projects/{{projectId}}/tasks"
+method: POST
+headers:
+  Content-Type: application/json
+  Authorization: Bearer {{authToken}}
+body:
+  type: text
+  content: |-
+    {
+      "title": "Task 1",
+      "description": "First task",
+      "status": "TODO",
+      "priority": "LOW",
+      "assigneeId": null,
+      "dueDate": null
+    }
+order: 2000

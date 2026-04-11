@@ -1,7 +1,7 @@
 # TaskFlow — Production-Grade Task Management Backend
 
 > **A battle-tested, horizontally scalable RESTful backend for collaborative project and task management.**
-> Built with **Spring Boot 3**, **Java 21**, **PostgreSQL 15**, **Flyway**, **JWT**, **SSE**, and **Docker** —
+> Built with **Spring Boot 3**, **Java 17**, **PostgreSQL 15**, **Flyway**, **JWT**, **SSE**, and **Docker** —
 > engineered with a focus on clean architecture, zero-trust security, and operational observability.
 
 ---
@@ -41,7 +41,7 @@ The system was designed around three core tenets:
 
 | Layer | Technology | Rationale |
 |---|---|---|
-| **Runtime** | Java 21 | LTS, virtual threads ready, modern records/pattern matching |
+| **Runtime** | Java 17 | LTS, stable JVM, mature ecosystem |
 | **Framework** | Spring Boot 3 | Convention-over-configuration, mature ecosystem, battle-tested |
 | **ORM** | Spring Data JPA / Hibernate | Reduces boilerplate; repository pattern aligns with clean arch |
 | **Security** | Spring Security + JWT (HS256) | Stateless, horizontally scalable, widely adopted |
@@ -98,7 +98,7 @@ TaskFlow follows a **strict layered architecture** — no cross-layer leakage, n
 ### Design Principles
 
 - **Single Responsibility per Layer** — Controllers own HTTP semantics. Services own business invariants. Repositories own data access. Cross-cutting concerns (auth, logging) are handled by filters and AOP — not smeared across services.
-- **DTO Boundary Discipline** — Domain entities never escape the service layer. All API I/O flows through request/response DTOs, decoupling the internal model from the API contract.
+- **DTO Boundary Discipline** — Request DTOs are used for input validation, while some response endpoints currently still return JPA entities directly. This is a pragmatic boundary that may be tightened in later iterations.
 - **No God Classes** — every class has a clearly scoped responsibility. This makes unit testing deterministic and refactoring surgical.
 
 ---
@@ -112,7 +112,7 @@ TaskFlow implements **zero-session, token-based auth** using JWTs — making eac
 ```
 POST /auth/register
   ├── Validate payload (name, email, password)
-  ├── Hash password with BCrypt (cost factor: 12)
+  ├── Hash password with BCrypt (strength 12)
   └── Persist user entity
 
 POST /auth/login
@@ -339,7 +339,7 @@ public class Task {
     @Version
     private Long version;
 
-    private Instant updatedAt;
+    private Timestamp updatedAt;
     // ...
 }
 ```
@@ -483,7 +483,7 @@ DB_NAME=taskflow
 JWT_SECRET=taskflow-super-secret-key-for-jwt-signing-123456
 JWT_EXPIRATION=86400000
 
-API_PORT=8081
+API_PORT=8080
 ```
 
 > In a real production deployment, secrets would be injected via a secrets manager (AWS SSM, HashiCorp Vault) — never committed to version control.
@@ -502,9 +502,13 @@ cd backend
 ### End-to-End Shell Suite
 
 ```bash
-chmod +x scripts/test_taskflow.sh
-./scripts/test_taskflow.sh
+chmod +x test_taskflow.sh
+./test_taskflow.sh
 ```
+
+### Postman Collection
+
+A reusable Postman collection is available in `postman/TaskFlow.postman_collection.json` with a corresponding environment file at `postman/TaskFlow.postman_environment.json`.
 
 ### Coverage
 
@@ -598,7 +602,7 @@ CREATE TABLE task_activity_logs (
 
 ```
 ✔  JWT stateless auth — horizontally scalable, session-free
-✔  BCrypt strength-12 password hashing
+✔  BCrypt password hashing
 ✔  Clean layered architecture — no cross-layer leakage
 ✔  Project + task CRUD with ownership enforcement
 ✔  SSE real-time push for TASK_CREATED / UPDATED / DELETED
