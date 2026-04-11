@@ -1,58 +1,150 @@
-# 🚀 TaskFlow Backend
+# 🚀 TaskFlow — Production-Ready Real-Time Task Management Backend
 
-A production-grade backend system for managing **Projects and Tasks** with authentication, authorization, pagination, and real-time extensibility.
+> **A robust, scalable backend system for collaborative project and task management**
+> Built with **Spring Boot**, **PostgreSQL**, **Docker**, **Flyway**, and **Server-Sent Events (SSE)**.
+> Designed with production-grade practices: clean architecture, secure auth, migrations, optimistic locking, and structured logging.  
 
 ---
 
-# 🧠 Overview
+# 📌 Overview
 
-TaskFlow is a RESTful backend built using:
+TaskFlow is a production-grade RESTful backend for managing:
 
-* **Java + Spring Boot**
-* **PostgreSQL (Dockerized)**
-* **JWT Authentication**
-* **Flyway Migrations**
+* **Users**
+* **Projects**
+* **Tasks**
+* **Task assignments**
+* **Real-time task updates**
 
-It supports:
+It was built as part of an engineering take-home assignment with focus on:
 
-```text
-✔ User Authentication (JWT)
-✔ Project Management
-✔ Task Management
-✔ Filtering + Pagination
-✔ Aggregation (Stats API)
-✔ Proper Error Handling
-✔ Secure ENV-based configuration
+```text id="rm1"
+✔ clean architecture
+✔ secure authentication
+✔ scalable APIs
+✔ Docker-first setup
+✔ database migrations
+✔ production engineering best practices
 ```
 
 ---
 
-# 🏗️ Architecture
+# 🏗️ Tech Stack
 
-```text
+## Backend
+
+* **Java 21**
+* **Spring Boot 3**
+* **Spring Security**
+* **Spring Data JPA / Hibernate**
+* **Flyway migrations**
+
+## Database
+
+* **PostgreSQL 15**
+
+## Infrastructure
+
+* **Docker**
+* **Docker Compose**
+
+## Security
+
+* **JWT Authentication**
+* **BCrypt Password Hashing**
+
+## Real-Time
+
+* **Server-Sent Events (SSE)**
+
+## Utilities
+
+* **SLF4J / Logback structured logging**
+* **Lombok**
+* **Maven**
+
+---
+
+# 🧠 Architecture
+
+TaskFlow follows a clean layered architecture:
+
+```text id="rm2"
 Controller → Service → Repository → Database
 ```
 
-* **Controller** → Handles HTTP layer
-* **Service** → Business logic + authorization
-* **Repository** → Database interaction (JPA)
-* **Security** → JWT-based stateless authentication
+### Layer Responsibilities
+
+### Controller
+
+* Handles HTTP requests / responses
+* Request validation
+* DTO mapping
+
+### Service
+
+* Business logic
+* Authorization checks
+* Real-time event publishing
+
+### Repository
+
+* JPA queries
+* pagination
+* aggregations
+
+### Security
+
+* JWT filter
+* stateless auth
+
+### Why this structure?
+
+* maintainable
+* testable
+* avoids god classes
+* clean separation of concerns
 
 ---
 
-# 🔐 Authentication
+# 🔐 Authentication Design
 
-| Method | Endpoint       | Description               |
-| ------ | -------------- | ------------------------- |
-| POST   | /auth/register | Register new user         |
-| POST   | /auth/login    | Login → returns JWT token |
+TaskFlow uses **JWT-based stateless authentication** with **Spring Security**, **BCrypt**, and a custom JWT filter.
 
 ---
 
-## 🔑 JWT Details
+## Authentication Flow
 
-* Algorithm: HS256
-* Expiry: 24 hours
+### 1. Register
+
+```text id="rm3"
+POST /auth/register
+```
+
+* User registers with:
+
+  * name
+  * email
+  * password
+* Password is hashed using **BCrypt (strength 12)** before saving.
+
+---
+
+### 2. Login
+
+```text id="rm4"
+POST /auth/login
+```
+
+* Email + password validated
+* JWT token returned
+
+---
+
+### JWT Details
+
+* Algorithm: **HS256**
+* Expiry: **24 hours**
 * Claims:
 
   * `userId`
@@ -60,243 +152,634 @@ Controller → Service → Repository → Database
 
 ---
 
-# 📦 Project APIs
+### 3. Protected APIs
 
-| Method | Endpoint             | Description                    |
-| ------ | -------------------- | ------------------------------ |
-| GET    | /projects            | List user projects (paginated) |
-| POST   | /projects            | Create project                 |
-| GET    | /projects/{id}       | Get project                    |
-| PATCH  | /projects/{id}       | Update project (owner only)    |
-| DELETE | /projects/{id}       | Delete project (owner only)    |
-| GET    | /projects/{id}/stats | Task stats (status + assignee) |
+All non-auth APIs require:
 
----
+```text id="rm5"
+Authorization: Bearer <token>
+```
 
-# 📝 Task APIs
+JWT filter:
 
-| Method | Endpoint             | Description                       |
-| ------ | -------------------- | --------------------------------- |
-| GET    | /projects/{id}/tasks | List tasks (filters + pagination) |
-| POST   | /projects/{id}/tasks | Create task                       |
-| PATCH  | /tasks/{id}          | Update task                       |
-| DELETE | /tasks/{id}          | Delete task                       |
+* extracts token
+* validates signature + expiry
+* loads userId into Spring Security context
 
 ---
 
-# 🔍 Query Parameters
+## Why JWT?
 
-### Pagination
+Chosen because:
 
-```text
+* stateless → horizontally scalable
+* simple for REST APIs
+* clean for Docker deployments
+
+---
+
+## Tradeoffs
+
+* no refresh token flow
+* no token revocation yet
+* no MFA
+
+---
+
+## Future Improvements
+
+* refresh tokens
+* token blacklist
+* OAuth / SSO
+* MFA
+
+---
+
+# 📁 Project Management Design
+
+TaskFlow uses a **project-centric ownership model**.
+
+---
+
+## Features
+
+### Supported APIs
+
+| Method | Endpoint               | Description                    |
+| ------ | ---------------------- | ------------------------------ |
+| GET    | `/projects`            | List owned / assigned projects |
+| POST   | `/projects`            | Create project                 |
+| GET    | `/projects/{id}`       | Project details + tasks        |
+| PATCH  | `/projects/{id}`       | Update project                 |
+| DELETE | `/projects/{id}`       | Delete project                 |
+| GET    | `/projects/{id}/stats` | Project analytics              |
+
+---
+
+## Project Flow
+
+### Create Project
+
+* authenticated user becomes owner
+
+### List Projects
+
+Returns:
+
+* owned projects
+* projects where user is task assignee
+
+Implemented efficiently using:
+
+* batched task lookup
+* pagination
+
+### Get Project
+
+Returns:
+
+* project metadata
+* embedded tasks
+
+### Update / Delete
+
+Restricted to:
+
+* owner only
+
+Cascade delete ensures:
+
+```text id="rm6"
+project deletion also deletes all tasks
+```
+
+---
+
+## Design Decisions
+
+* UUID-based FK design
+* DTO aggregation for project + tasks
+* no heavy ORM relations
+
+---
+
+## Tradeoffs
+
+* single owner only
+* no project members yet
+* no soft delete
+
+---
+
+## Future Improvements
+
+* project collaboration
+* RBAC
+* audit logs
+
+---
+
+# 📝 Task Management Design
+
+TaskFlow uses a **project-scoped task model**.
+
+---
+
+## Supported APIs
+
+| Method | Endpoint               | Description |
+| ------ | ---------------------- | ----------- |
+| GET    | `/projects/{id}/tasks` | List tasks  |
+| POST   | `/projects/{id}/tasks` | Create task |
+| PATCH  | `/tasks/{id}`          | Update task |
+| DELETE | `/tasks/{id}`          | Delete task |
+
+---
+
+## Task Features
+
+### Create Task
+
+Supports:
+
+* title
+* description
+* status
+* priority
+* assignee
+* due date
+
+Validations:
+
+* project must exist
+* assignee must exist
+
+---
+
+### List Tasks
+
+Supports:
+
+* pagination
+* filters
+
+Examples:
+
+```text id="rm7"
 ?page=0&limit=10
-```
-
----
-
-### Task Filters
-
-```text
 ?status=TODO
-?assignee=<UUID>
+?assignee=<uuid>
 ```
 
 ---
 
-# 📊 Stats API Example
+### Update Task
 
-```json
+Supports PATCH semantics:
+
+* only provided fields update
+
+---
+
+### Delete Task
+
+Allowed for:
+
+* project owner
+* task creator
+
+---
+
+## Why this design?
+
+* intuitive project scoping
+* flexible updates
+* scalable listing
+
+---
+
+## Tradeoffs
+
+* no labels
+* no comments
+* no attachments
+
+---
+
+## Future Improvements
+
+* subtasks
+* labels
+* file uploads
+
+---
+
+# ⚡ Additional Features
+
+---
+
+# 🔄 Real-Time Updates (SSE)
+
+TaskFlow supports live task updates.
+
+---
+
+## Endpoint
+
+```text id="rm8"
+GET /projects/{id}/events
+```
+
+---
+
+## Events
+
+* TASK_CREATED
+* TASK_UPDATED
+* TASK_DELETED
+
+---
+
+## Why SSE?
+
+* lightweight
+* browser-friendly
+* simpler than WebSockets
+
+---
+
+## Tradeoffs
+
+* in-memory emitters → single instance only
+
+---
+
+## Better future options
+
+* Redis Pub/Sub
+* WebSockets
+
+---
+
+# 📊 Project Stats API
+
+Endpoint:
+
+```text id="rm9"
+GET /projects/{id}/stats
+```
+
+Returns:
+
+* count by status
+* count by assignee
+
+---
+
+# 📄 Pagination / Filtering
+
+Supported across:
+
+* project listing
+* task listing
+
+Benefits:
+
+* scalable APIs
+* better UX
+
+---
+
+# 🔄 Concurrency Handling
+
+Implemented optimistic locking using:
+
+```text id="rm10"
+@Version
+```
+
+Task stores:
+
+* version
+* updatedAt
+
+Benefits:
+
+* prevents lost updates
+* safe concurrent edits
+
+Conflict returns:
+
+```text id="rm11"
+409 Conflict
+```
+
+---
+
+# 🧱 Structured Logging
+
+Implemented structured logging for:
+
+* auth events
+* project lifecycle
+* task lifecycle
+* SSE subscriptions
+
+Why:
+
+* easier debugging
+* operational visibility
+
+---
+
+# 🗄️ Database & Migrations
+
+Database schema is managed using **Flyway**.
+
+---
+
+## Included migrations
+
+* users table
+* projects table
+* tasks table
+* seed data
+* version / updatedAt support
+
+---
+
+## Rollback support
+
+Every migration includes:
+
+* Up migration (`V*.sql`)
+* Down migration (`U*.sql`)
+
+---
+
+# 🌱 Seed Data
+
+Included for local testing.
+
+---
+
+## Seed users
+
+```text id="rm12"
+Email: test@example.com
+Password: password123
+```
+
+```text id="rm13"
+Email: assignee@example.com
+Password: password123
+```
+
+---
+
+## Seed project
+
+* Seed Project
+
+## Seed tasks
+
+* TODO
+* IN_PROGRESS
+* DONE
+
+---
+
+# ⚠️ Error Handling
+
+Consistent API responses via global exception handling.
+
+| Case              | Status |
+| ----------------- | ------ |
+| Validation failed | 400    |
+| Unauthorized      | 401    |
+| Forbidden         | 403    |
+| Not found         | 404    |
+| Conflict          | 409    |
+
+Example:
+
+```json id="rm14"
 {
-  "statusCounts": {
-    "TODO": 3,
-    "DONE": 2
-  },
-  "assigneeCounts": {
-    "userId1": 2,
-    "UNASSIGNED": 1
+  "error": "validation failed",
+  "fields": {
+    "email": "is required"
   }
 }
 ```
 
 ---
 
-# ⚠️ Error Handling
+# 🐳 Running Locally
 
-| Case             | Status | Response                                            |
-| ---------------- | ------ | --------------------------------------------------- |
-| Validation Error | 400    | `{ "error": "validation failed", "fields": {...} }` |
-| Unauthenticated  | 401    | `{ "error": "unauthorized" }`                       |
-| Forbidden        | 403    | `{ "error": "forbidden" }`                          |
-| Not Found        | 404    | `{ "error": "not found" }`                          |
+---
+
+## Prerequisites
+
+* Docker
+* Docker Compose
+
+---
+
+## Setup
+
+```bash id="rm15"
+git clone https://github.com/<your-username>/taskflow-sreejit-chaudhury.git
+cd taskflow-sreejit-chaudhury
+
+cp .env.example .env
+
+docker compose up --build
+```
+
+---
+
+## Services
+
+### API:
+
+```text id="rm16"
+http://localhost:8081
+```
+
+### PostgreSQL:
+
+```text id="rm17"
+localhost:5433
+```
 
 ---
 
 # 🔧 Environment Variables
 
-Create a `.env` file:
-
-```env
-DB_URL=jdbc:postgresql://localhost:5433/taskflow
+```env id="rm18"
 DB_USERNAME=taskflow
 DB_PASSWORD=taskflow
+DB_NAME=taskflow
 
 JWT_SECRET=taskflow-super-secret-key-for-jwt-signing-123456
 JWT_EXPIRATION=86400000
+
+API_PORT=8081
 ```
 
 ---
 
-# 🐳 Running with Docker
+# 🗃️ Running Migrations
 
-```bash
-cp .env.example .env
-docker compose up -d
-```
+Flyway runs automatically on startup.
 
-This starts:
-
-* PostgreSQL on `localhost:5433`
-* TaskFlow API on `http://localhost:8080`
-
-Flyway runs automatically when the API starts. The seed migration creates test data for immediate login and API testing.
-
-Test credentials:
-
-```text
-Email:    test@example.com
-Password: password123
-```
+No manual migration step required.
 
 ---
 
-# ▶️ Run Application
+# 🧪 Testing
 
-```bash
-export DB_URL=jdbc:postgresql://localhost:5433/taskflow
-export DB_USERNAME=taskflow
-export DB_PASSWORD=taskflow
-export JWT_SECRET=taskflow-super-secret-key-for-jwt-signing-123456
-export JWT_EXPIRATION=86400000
+TaskFlow includes:
 
-./mvnw spring-boot:run
-```
+* integration tests
+* end-to-end shell script suite
 
 ---
 
-# 🧪 Sample Flow
+## Run tests
 
-```bash
-# Register
-POST /auth/register
+### Maven Integration tests
 
-# Login → get token
-POST /auth/login
-
-# Use token
-Authorization: Bearer <token>
-
-# Create project
-POST /projects
-
-# Create task
-POST /projects/{id}/tasks
-```
-
-Seeded project/task data is also available after running migrations:
-
-```text
-Seed user:      test@example.com / password123
-Seed project:   Seed Project
-Seed tasks:     TODO, IN_PROGRESS, DONE
-```
-
----
-
-# 🧪 Tests and Coverage
-
-The backend includes integration tests that run through the real Spring Boot HTTP layer using `MockMvc`. Tests start the application context, apply Flyway migrations against an in-memory H2 database in PostgreSQL compatibility mode, and exercise controllers, services, repositories, validation, and JWT security together.
-
-The integration suite covers:
-
-* Registration, login, JWT generation, and password hashing
-* Missing-token authentication failure (`401`)
-* Validation errors with structured field responses (`400`)
-* Duplicate registration and invalid login
-* Forbidden project updates (`403`)
-* Not-found and invalid-parameter responses
-* Task creation with invalid assignee handling
-* Project/task filtering, pagination, and stats
-* Task update/delete and project delete cascade behavior
-
-Run all tests:
-
-```bash
+```bash id="rm19"
+cd backend
 ./mvnw test
 ```
 
-Run only the integration test suite:
+---
 
-```bash
-./mvnw test -Dtest=TaskFlowIntegrationTests
+### E2E Script
+
+```bash id="rm20"
+chmod +x scripts/test_taskflow.sh
+./scripts/test_taskflow.sh
 ```
 
-JaCoCo coverage is generated during the Maven test phase.
+---
 
-```bash
-./mvnw test
-open target/site/jacoco/index.html
-```
+## Coverage
 
-Current coverage from the latest local run:
+Current local coverage:
 
-```text
+```text id="rm21"
 Instruction coverage: 83%
-Branch coverage:      67%
-Classes covered:      17 / 17
-Integration tests:    13 passing
+Branch coverage: 67%
+13 integration tests passing
 ```
 
 ---
 
-# 🧠 Design Decisions
-
-* **Stateless Auth (JWT)** → scalable, no session storage
-* **Layered Architecture** → clean separation of concerns
-* **Global Exception Handling** → consistent API responses
-* **Pagination** → scalable APIs
-* **Aggregation Queries** → efficient stats computation
-* **ENV Config** → secure and flexible deployment
+# 📚 API Reference
 
 ---
 
-# 🚀 Future Improvements
+## Auth
 
-```text
-✔ Project Members (multi-user collaboration)
-✔ SSE (real-time updates)
-✔ Optimistic Locking (concurrency control)
-✔ Email notifications
-✔ Role-based access control (RBAC)
+```text id="rm22"
+POST /auth/register
+POST /auth/login
 ```
+
+---
+
+## Projects
+
+```text id="rm23"
+GET    /projects
+POST   /projects
+GET    /projects/{id}
+PATCH  /projects/{id}
+DELETE /projects/{id}
+GET    /projects/{id}/stats
+GET    /projects/{id}/events
+```
+
+---
+
+## Tasks
+
+```text id="rm24"
+GET    /projects/{id}/tasks?page=&limit=&status=&assignee=
+POST   /projects/{id}/tasks
+PATCH  /tasks/{id}
+DELETE /tasks/{id}
+```
+
+---
+
+# 🚀 What I’d Improve With More Time
+
+---
+
+## Planned Enhancements
+
+### Collaboration / RBAC
+
+* project members
+* owner / editor / viewer roles
+
+### Notifications
+
+* due date alerts
+* email reminders
+
+### Audit Trail
+
+* status history
+* activity logs
+
+### Richer workflows
+
+* subtasks
+* labels
+* comments
+
+### Scalable realtime
+
+* Redis + WebSockets
+
+### Observability
+
+* metrics
+* tracing
+* dashboards
 
 ---
 
 # 💥 Highlights
 
-```text
-✔ Production-ready backend
-✔ Secure (no hardcoded secrets)
-✔ Clean architecture
-✔ Scalable APIs
-✔ Strong error handling
+```text id="rm25"
+✔ JWT-based stateless auth
+✔ secure BCrypt password hashing
+✔ project / task CRUD
+✔ pagination + filters
+✔ project analytics
+✔ optimistic locking
+✔ SSE real-time updates
+✔ Docker-first setup
+✔ Flyway migrations
+✔ integration tests
+✔ structured logging
 ```
 
 ---
 
-# 🙌 Author
+# 👨‍💻 Author
 
-Built as part of a backend engineering assignment with focus on:
+**Sreejit Chaudhury**
 
-* system design
+Built with focus on:
+
+* production readiness
 * clean code
-* production practices
+* developer experience
+* scalable system design
