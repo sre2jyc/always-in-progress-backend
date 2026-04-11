@@ -499,6 +499,12 @@ cd backend
 ./mvnw test
 ```
 
+| Metric | Value |
+|---|---|
+| Instruction coverage | **83%** |
+| Branch coverage | **67%** |
+| Integration tests passing | **13 / 13** |
+
 ### End-to-End Shell Suite
 
 ```bash
@@ -510,13 +516,11 @@ chmod +x test_taskflow.sh
 
 A reusable Postman collection is available in `postman/TaskFlow.postman_collection.json` with a corresponding environment file at `postman/TaskFlow.postman_environment.json`.
 
-### Coverage
+### Postman Testing Screenshots
 
-| Metric | Value |
-|---|---|
-| Instruction coverage | **83%** |
-| Branch coverage | **67%** |
-| Integration tests passing | **13 / 13** |
+Screenshots demonstrating Postman API testing are available in the `screenshot_testing/` folder.
+
+
 
 ### Testing Philosophy
 
