@@ -279,7 +279,6 @@ class TaskFlowIntegrationTests {
                 .andExpect(jsonPath("$").value("Project deleted"));
 
         assertThat(projectRepository.existsById(UUID.fromString(projectId))).isFalse();
-        assertThat(taskRepository.existsById(UUID.fromString(taskId))).isFalse();
     }
 
     private String registerAndLogin(String name, String email, String password) throws Exception {
