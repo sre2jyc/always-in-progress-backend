@@ -1,0 +1,325 @@
+TaskFlow — Final 4 Phase Roadmap
+
+Phase 1 — Production-Grade Real-Time Infrastructure
+Redis Pub/Sub + Audit Logs
+What you build:
+Replace in-memory SSE with Redis Pub/Sub fanout so real-time notifications work across multiple server instances. Simultaneously introduce the audit logging system capturing every task mutation with field-level change detection.
+
+Task mutation
+      ↓
+Service Layer
+      ├── Save to PostgreSQL (tasks table)
+      ├── Publish to Redis channel (real-time)
+      │         ↓
+      │   All API nodes fan out to SSE connections
+      │
+      └── Write to task_activity_logs (audit)
+                ↓
+          actor_id, actor_type, old_value, new_value
+          changed_fields, timestamp
+
+
+Audit schema:
+
+CREATE TABLE task_activity_logs (
+  id             UUID PRIMARY KEY,
+  task_id        UUID REFERENCES tasks(id),
+  project_id     UUID REFERENCES projects(id),
+  actor_id       UUID REFERENCES users(id),
+  actor_type     VARCHAR CHECK (actor_type IN ('USER','AI_AGENT','SYSTEM')),
+  action_type    VARCHAR,
+  old_value      JSONB,
+  new_value      JSONB,
+  changed_fields TEXT[],
+  created_at     TIMESTAMP DEFAULT now()
+);
+
+
+New endpoints:
+
+GET /tasks/{id}/history
+GET /projects/{id}/activity
+GET /projects/{id}/activity?actor_type=AI_AGENT
+GET /projects/{id}/activity?actor_id={userId}
+
+
+What you learn:
+	•	Event-driven distributed architecture
+	•	Redis Pub/Sub mechanics
+	•	Horizontal scaling in practice
+	•	Append-only immutable data patterns
+	•	JSONB flexible storage in PostgreSQL
+	•	Transactional consistency across audit writes
+
+Phase 2 — AI Agent + MCP Server
+Conversational interface + protocol interoperability
+What you build:
+A Claude-powered agent that drives your existing REST backend through natural language. Then immediately expose those same tool definitions as an MCP server so any AI client can drive TaskFlow.
+Agent flow:
+
+User: "Create a project called Backend Redesign 
+       and add tasks for auth, database, and API work"
+        ↓
+Agent reasons about intent (ReAct pattern)
+        ↓
+Tool: POST /projects          → project created
+Tool: POST /projects/{id}/tasks × 3  → tasks created
+        ↓
+Each mutation hits audit log with actor_type=AI_AGENT
+        ↓
+"Done! Created Backend Redesign with 3 tasks"
+
+
+New endpoints:
+
+POST /agent/chat
+{
+  "message": "create a project called backend redesign",
+  "conversationId": "abc-123"
+}
+
+
+MCP layer on top:
+
+Phase 2a (internal):        Phase 2b (external):
+
+Your App                    Claude Desktop ──MCP──▶ TaskFlow
+    ↓                       Cursor         ──MCP──▶ TaskFlow
+  Agent                     Any AI client  ──MCP──▶ TaskFlow
+    ↓
+  Tools
+
+
+The tool definitions you write for the agent get wrapped in the MCP protocol. Most hard design work is already done by the time you build 2b.
+What the audit logs add here:
+
+User: "what did the agent change today?"
+        ↓
+GET /projects/{id}/activity?actor_type=AI_AGENT
+        ↓
+Complete record of every agent action
+with old and new values
+
+
+What you learn:
+	•	Tool use and function calling
+	•	ReAct reasoning pattern
+	•	Agentic loops and multi-step execution
+	•	Conversation memory and context window management
+	•	Prompt engineering for production systems
+	•	Error recovery in agents — 409/403 handling
+	•	Streaming agent responses via SSE
+	•	MCP protocol design and implementation
+	•	Ecosystem interoperability thinking
+
+Phase 3 — Vector DB + Semantic Intelligence
+pgvector + semantic search + agent memory
+What you build:
+Two things that share the same underlying infrastructure — pgvector extends your existing PostgreSQL so no new database to operate.
+Semantic search:
+
+User: "find tasks related to authentication work"
+        ↓
+Convert query to embedding vector
+        ↓
+pgvector similarity search over task descriptions
+        ↓
+Returns semantically relevant tasks
+no exact keyword match needed
+
+
+Agent memory across sessions:
+
+Conversation ends
+        ↓
+Summarize and store as embedding
+        ↓
+User returns next session
+        ↓
+Retrieve relevant past context via similarity search
+        ↓
+Agent remembers relevant history naturally
+
+
+Schema additions:
+
+-- Add to tasks table
+ALTER TABLE tasks
+ADD COLUMN description_embedding vector(1536);
+
+-- Agent memory store
+CREATE TABLE agent_memory (
+  id              UUID PRIMARY KEY,
+  user_id         UUID REFERENCES users(id),
+  project_id      UUID REFERENCES projects(id),
+  summary         TEXT,
+  embedding       vector(1536),
+  created_at      TIMESTAMP DEFAULT now()
+);
+
+
+New endpoints:
+
+GET /projects/{id}/tasks/search?q=authentication work
+GET /agent/memory/{userId}
+
+
+Why pgvector over a dedicated vector DB:
+
+Pinecone / Weaviate    pgvector
+───────────────────    ────────────────────────────
+New service to run     Extends your existing RDS
+New cost               No additional cost
+New ops concern        Same Flyway migrations
+Separate backups       Same RDS backup policy
+Better at huge scale   Fine for portfolio scale
+
+
+Pinecone becomes relevant when you have millions of vectors and need sub-10ms search. pgvector is the right starting point and a genuinely production-used tool at companies like Supabase.
+What you learn:
+	•	What embeddings actually are geometrically
+	•	Vector similarity search — cosine similarity
+	•	RAG fundamentals — grounding LLMs in your own data
+	•	Chunking strategies for long text
+	•	pgvector specifically — widely used, growing fast
+	•	Semantic vs keyword search tradeoffs
+	•	AI memory patterns across sessions
+
+Phase 4 — AWS Deployment + Analytical Data Layer
+Production infrastructure + Redshift audit analytics
+What you build:
+Full production deployment on AWS with Terraform, plus a data warehouse pipeline that separates operational and analytical audit log queries.
+Core AWS infrastructure:
+
+Internet
+    ↓
+Route 53 → ACM (SSL)
+    ↓
+ALB (public subnet)
+    ↓
+ECS Fargate (private subnet)
+    ↓                    ↓
+RDS PostgreSQL     ElastiCache Redis
+(private subnet)   (private subnet)
+
+Cross-cutting:
+Secrets Manager → injected into ECS at runtime
+IAM roles       → least privilege per service
+CloudWatch      → logs and metrics
+ECR             → Docker image registry
+
+
+CI/CD pipeline:
+
+git push to main
+      ↓
+GitHub Actions
+      ├── mvnw test (run all integration tests)
+      ├── Docker build
+      ├── Push to ECR
+      └── ECS rolling deployment (zero downtime)
+
+
+Analytical data layer — the PostgreSQL + Redshift split:
+
+Operational queries          Analytical queries
+───────────────────          ──────────────────
+PostgreSQL on RDS            Redshift
+                             
+"show task history"          "how many tasks did the
+"what did agent do today"    AI agent complete this
+Live API responses           month across all users"
+Hot recent data              Years of history
+Fast transactional reads     Slow powerful analytics
+                             BI dashboards
+
+Pipeline between them:
+PostgreSQL audit logs
+      ↓
+AWS Glue ETL (nightly)
+      ↓
+Redshift
+      ↓
+Analytical queries + dashboards
+
+
+Infrastructure as code — Terraform structure:
+
+terraform/
+  networking.tf    # VPC, subnets, security groups
+  compute.tf       # ECS cluster, task definitions
+  database.tf      # RDS, ElastiCache
+  warehouse.tf     # Redshift, Glue ETL job
+  secrets.tf       # Secrets Manager entries
+  cdn.tf           # Route 53, ACM, ALB
+
+
+What you learn:
+	•	ECS Fargate and container orchestration
+	•	VPC networking — the part most developers struggle with
+	•	Terraform and infrastructure as code
+	•	CI/CD pipelines with GitHub Actions
+	•	Zero downtime rolling deployments
+	•	Secrets management with AWS Secrets Manager
+	•	Operational vs analytical storage separation
+	•	ETL pipeline design with AWS Glue
+	•	Redshift data warehousing fundamentals
+
+The Complete Picture
+
+FOUNDATION                    PHASE 1
+─────────────────────         ──────────────────────────
+Spring Boot REST API    →     Redis Pub/Sub fanout
+JWT + BCrypt                  Distributed SSE
+Optimistic locking            Audit logs (PostgreSQL)
+Flyway migrations             Actor attribution
+Docker Compose                Append-only history
+
+
+PHASE 2                       PHASE 3
+──────────────────────        ──────────────────────────
+AI Agent (Claude)       →     pgvector embeddings
+Tool use + ReAct              Semantic task search
+Conversation memory           Agent session memory
+Error recovery                RAG fundamentals
+MCP Server                    Cross-session context
+Protocol interoperability
+
+
+PHASE 4
+──────────────────────────────────────────────────
+ECS Fargate + RDS + ElastiCache + Redis
+Terraform infrastructure as code
+GitHub Actions CI/CD
+PostgreSQL (operational) + Redshift (analytical)
+AWS Glue ETL pipeline
+Full production deployment
+
+
+Skills Unlocked Per Phase
+
+
+
+|Phase     |Core Skills                                      |Industry Signal          |
+|----------|-------------------------------------------------|-------------------------|
+|Foundation|Backend architecture, security, concurrency      |Systems thinking         |
+|Phase 1   |Distributed systems, event-driven, audit patterns|Redis, immutable data    |
+|Phase 2   |Applied AI, agentic systems, protocol design     |Tool use, MCP, ReAct     |
+|Phase 3   |AI infrastructure, semantic search, memory       |Embeddings, RAG, pgvector|
+|Phase 4   |Cloud, DevOps, data engineering                  |AWS, Terraform, Redshift |
+
+Realistic Timeline
+
+
+
+|Phase                       |Estimated Time|
+|----------------------------|--------------|
+|Phase 1 — Redis + Audit Logs|2-3 weeks     |
+|Phase 2 — Agent + MCP       |4-5 weeks     |
+|Phase 3 — Vector DB + Memory|2-3 weeks     |
+|Phase 4 — AWS + Redshift    |3-4 weeks     |
+|**Total**                   |**~3 months** |
+
+The One Paragraph Summary
+“I built TaskFlow — a production-grade task management backend in Spring Boot with JWT auth, optimistic locking, and Flyway migrations. I extended it with Redis Pub/Sub for distributed real-time notifications and an append-only audit logging system that tracks every change with full field-level history. I then added a Claude-powered AI agent using tool use and the ReAct pattern for natural language task management, exposed as an MCP server for ecosystem interoperability. I added semantic search and cross-session agent memory using pgvector embeddings and RAG. Finally I deployed the entire system on AWS using ECS Fargate, RDS, ElastiCache, and Redshift for analytical audit queries — with all infrastructure provisioned in Terraform and a zero-downtime CI/CD pipeline via GitHub Actions.”
+That is one project. That is the point.​​​​​​​​​​​​​​​​
