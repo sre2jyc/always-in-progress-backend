@@ -1,8 +1,8 @@
 # TaskFlow — Production-Grade Task Management Backend
 
 > **A battle-tested, horizontally scalable RESTful backend for collaborative project and task management.**
-> Built with **Spring Boot 3**, **Java 17**, **PostgreSQL 15**, **Flyway**, **JWT**, **SSE**, and **Docker** —
-> engineered with a focus on clean architecture, zero-trust security, and operational observability.
+> Built with **Spring Boot 3**, **Java 17**, **PostgreSQL 15**, **Redis**, **Flyway**, **JWT**, **SSE**, and **Docker** —
+> engineered with a focus on clean architecture, zero-trust security, distributed real-time infrastructure, and a guaranteed-delivery audit trail.
 
 ---
 
@@ -14,7 +14,8 @@
 - [Authentication & Security](#authentication--security)
 - [Data Model](#data-model)
 - [API Design](#api-design)
-- [Real-Time Engine (SSE)](#real-time-engine-sse)
+- [Real-Time Engine (SSE + Redis Pub/Sub)](#real-time-engine-sse--redis-pubsub)
+- [Audit Logging (Transactional Outbox)](#audit-logging-transactional-outbox)
 - [Concurrency & Consistency](#concurrency--consistency)
 - [Database Migrations](#database-migrations)
 - [Error Handling](#error-handling)
@@ -27,13 +28,14 @@
 
 ## Overview
 
-TaskFlow is a **production-grade RESTful API** designed as a backend system for real-world collaborative task management. It models the kind of domain logic you'd find in tools like Jira, Linear, or Asana — project ownership, task lifecycle management, real-time notifications, and role-scoped access control — built with engineering rigour from day one.
+TaskFlow is a **production-grade RESTful API** designed as a backend system for real-world collaborative task management. It models the kind of domain logic you'd find in tools like Jira, Linear, or Asana — project ownership, task lifecycle management, distributed real-time notifications, and a complete audit trail — built with engineering rigour from day one.
 
-The system was designed around three core tenets:
+The system was designed around four core tenets:
 
 - **Correctness** — optimistic locking, transactional writes, and migration-first schema management prevent data races and schema drift
-- **Observability** — structured logging throughout every service layer enables operational debugging without code spelunking
-- **Scalability** — stateless JWT auth, paginated list APIs, and a Dockerized setup make horizontal scaling a natural next step
+- **Observability** — structured logging and a full append-only audit log enable operational debugging and accountability
+- **Scalability** — stateless JWT auth, Redis Pub/Sub SSE fanout, and a Dockerized setup make horizontal scaling a natural next step
+- **Reliability** — the Transactional Outbox pattern guarantees zero audit message loss even under failure conditions
 
 ---
 
@@ -45,7 +47,8 @@ The system was designed around three core tenets:
 | **Framework** | Spring Boot 3 | Convention-over-configuration, mature ecosystem, battle-tested |
 | **ORM** | Spring Data JPA / Hibernate | Reduces boilerplate; repository pattern aligns with clean arch |
 | **Security** | Spring Security + JWT (HS256) | Stateless, horizontally scalable, widely adopted |
-| **Database** | PostgreSQL 15 | ACID guarantees, strong JSON support, production-proven |
+| **Database** | PostgreSQL 15 | ACID guarantees, strong JSONB support, production-proven |
+| **Message Broker** | Redis 7 (Pub/Sub) | Distributed SSE fanout across API instances; Lettuce client via Spring Data Redis |
 | **Migrations** | Flyway | Versioned, deterministic schema evolution with rollback support |
 | **Real-Time** | Server-Sent Events (SSE) | Lightweight, browser-native; appropriate complexity for push-only notifications |
 | **Containerisation** | Docker + Docker Compose | Reproducible builds, environment parity, single-command setup |
@@ -69,7 +72,6 @@ TaskFlow follows a **strict layered architecture** — no cross-layer leakage, n
 │              Controller Layer                │
 │   • HTTP request/response handling           │
 │   • DTO validation (@Valid, @NotBlank)       │
-│   • DTO ↔ Domain mapping                    │
 │   • No business logic                        │
 └───────────────────────┬──────────────────────┘
                         │
@@ -77,22 +79,28 @@ TaskFlow follows a **strict layered architecture** — no cross-layer leakage, n
 │               Service Layer                  │
 │   • Core business logic                      │
 │   • Authorization enforcement                │
-│   • SSE event publishing                     │
+│   • Outbox write (atomic with task save)     │
+│   • Redis Pub/Sub event publishing           │
 │   • Transaction boundary ownership           │
-└───────────────────────┬──────────────────────┘
-                        │
-┌───────────────────────▼──────────────────────┐
-│             Repository Layer                 │
-│   • JPA repositories (Spring Data)           │
-│   • Pagination & dynamic filtering           │
-│   • Aggregations for stats endpoints         │
-└───────────────────────┬──────────────────────┘
-                        │
-┌───────────────────────▼──────────────────────┐
-│              PostgreSQL 15                   │
-│   • Managed via Flyway versioned migrations  │
-│   • UUID primary keys for distributed safety │
-└──────────────────────────────────────────────┘
+└──────────┬────────────────────────┬──────────┘
+           │                        │
+┌──────────▼──────────┐  ┌─────────▼──────────┐
+│   Repository Layer  │  │ RedisEventPublisher │
+│   JPA / Spring Data │  │ publishes to Redis  │
+└──────────┬──────────┘  └─────────┬──────────┘
+           │                        │
+┌──────────▼──────────┐  ┌─────────▼──────────┐
+│   PostgreSQL 15     │  │     Redis 7         │
+│   tasks             │  │  taskflow:          │
+│   outbox            │  │  task-events        │
+│   task_activity_logs│  │  channel            │
+└─────────────────────┘  └─────────┬──────────┘
+                                    │
+                         ┌──────────▼──────────┐
+                         │ RedisEventSubscriber │
+                         │ fans out to local    │
+                         │ SSE emitters         │
+                         └─────────────────────┘
 ```
 
 ### Design Principles
@@ -195,6 +203,32 @@ BCrypt's adaptive cost factor makes brute-force attacks computationally infeasib
 │  updated_at (TIMESTAMP)               │
 │  created_at (TIMESTAMP)               │
 └───────────────────────────────────────┘
+
+┌───────────────────────────────────────┐
+│               outbox                  │
+│  id (UUID PK)                         │
+│  event_type (VARCHAR)                 │
+│  payload (JSONB)                      │
+│  processed (BOOLEAN)                  │
+│  created_at (TIMESTAMP)               │
+│  processed_at (TIMESTAMP)             │
+└───────────────────────────────────────┘
+
+┌───────────────────────────────────────┐
+│         task_activity_logs            │
+│  id (UUID PK)                         │
+│  task_id (UUID — no FK intentional)   │
+│  project_id (UUID FK → projects)      │
+│  actor_id (UUID FK → users)           │
+│  actor_type (USER/AI_AGENT/SYSTEM)    │
+│  action_type (CREATED/UPDATED/etc.)   │
+│  old_value (JSONB)                    │
+│  new_value (JSONB)                    │
+│  changed_fields (TEXT[])              │
+│  conversation_id (UUID nullable)      │
+│  metadata (JSONB nullable)            │
+│  created_at (TIMESTAMP)               │
+└───────────────────────────────────────┘
 ```
 
 ### Schema Design Decisions
@@ -203,6 +237,8 @@ BCrypt's adaptive cost factor makes brute-force attacks computationally infeasib
 - **ENUM for status/priority** — enforces valid states at the DB layer, not just application layer
 - **Cascade delete on project → tasks** — referential integrity enforced by the database, not application code
 - **`version` + `updated_at` on tasks** — enables optimistic locking and audit tracing simultaneously
+- **`task_id` has no FK on audit logs** — audit records must outlive the task. Deleting a task preserves its full mutation history
+- **Transactional Outbox** — the task save and outbox insert are atomic; a background worker drains outbox entries into `task_activity_logs` asynchronously, decoupling the write path from audit persistence
 
 ---
 
@@ -236,6 +272,15 @@ PATCH  /tasks/{id}                 Partial update (PATCH semantics)
 DELETE /tasks/{id}                 Delete task (owner or creator only)
 ```
 
+### Audit & Activity
+
+```
+GET    /tasks/{id}/history                           Full mutation history for a task
+GET    /projects/{id}/activity                       All activity across a project
+GET    /projects/{id}/activity?actor_type=AI_AGENT   Filter by actor type
+GET    /projects/{id}/activity?actor_id={uuid}       Filter by specific user
+```
+
 ### Task Query Parameters
 
 ```
@@ -257,11 +302,11 @@ GET /projects/{id}/tasks?page=0&limit=10&status=TODO&assignee=<uuid>
 
 ---
 
-## Real-Time Engine (SSE)
+## Real-Time Engine (SSE + Redis Pub/Sub)
 
 ### Overview
 
-TaskFlow delivers live task lifecycle events to subscribed clients via **Server-Sent Events (SSE)** — a unidirectional, HTTP-native push mechanism that works out of the box with browsers and does not require WebSocket infrastructure.
+TaskFlow delivers live task lifecycle events via **Server-Sent Events (SSE)** backed by **Redis Pub/Sub** — enabling real-time fanout across multiple API instances. Any server that receives a task mutation publishes to a shared Redis channel; all instances receive the message and fan out to their local SSE connections.
 
 ### Endpoint
 
@@ -282,48 +327,82 @@ Authorization: Bearer <token>
 ### Architecture
 
 ```
-Client subscribes to /projects/{id}/events
+Task mutation in TaskService
         │
-        ▼
-SseEmitter registered in-memory emitter registry
+        ├── RedisEventPublisher.publish(projectId, eventName, data)
+        │         │
+        │         ▼
+        │   Redis channel: taskflow:task-events
+        │         │
+        │         ▼  (all API instances subscribed)
+        │   RedisEventSubscriber.onMessage()
+        │         │
+        │         ▼
+        │   SseService.send(projectId, eventName, data)
+        │         │
+        │         ▼
+        │   All local SSE emitters for projectId notified
         │
-        ▼
-Task mutation in Service Layer
-        │
-        ▼
-EventPublisher.publish(projectId, eventType, payload)
-        │
-        ▼
-All emitters for projectId receive the event
+        └── OutboxService.publishTaskEvent() [within same transaction]
 ```
 
-### Why SSE over WebSockets?
+### Why Redis Pub/Sub for SSE fanout?
 
-SSE is a deliberate, right-sized choice for this use case:
+The previous implementation stored SSE connections in a `ConcurrentHashMap` — correct for a single instance but broken under horizontal scale. When a mutation hits Instance 2, Instance 1's connected clients would never receive the event.
 
-- **Unidirectional push-only** — clients don't need to send data over the event stream; SSE is the correct abstraction
-- **Zero client library dependency** — `EventSource` is a native browser API
-- **HTTP/2 multiplexing** — SSE scales efficiently over HTTP/2 without per-connection TCP overhead
-- **Simpler infrastructure** — no WebSocket upgrade handshake, no protocol negotiation, no proxy configuration headaches
+Redis Pub/Sub solves this: every instance subscribes to the same channel. Any instance receiving a mutation publishes once; all instances fan out to their local connections.
 
-### Current Limitations & Scale Path
+**Why not Kafka or RabbitMQ?**
 
-The current implementation uses **in-memory emitter registration**, which bounds the system to a single instance.
+SSE notifications are best-effort — a missed notification is acceptable (client can refresh). Redis Pub/Sub is the right complexity for this use case. Kafka and RabbitMQ add significant operational overhead for a problem that doesn't require guaranteed delivery on the SSE path.
 
-For multi-node horizontal scale, the path is:
+**Note:** SSE fanout is intentionally fire-and-forget. Audit logging uses the Transactional Outbox pattern for guaranteed delivery — these are separate concerns with different reliability requirements.
+
+---
+
+## Audit Logging (Transactional Outbox)
+
+### Overview
+
+Every task mutation is captured in an **append-only audit log** (`task_activity_logs`) with full field-level change detection, actor attribution, and old/new value snapshots. Writes are guaranteed via the **Transactional Outbox Pattern** — zero message loss even under consumer failures.
+
+### Why Transactional Outbox instead of synchronous audit writes?
+
+Two naive approaches and why they fail:
+
+| Approach | Problem |
+|---|---|
+| Write audit log in same transaction | Overloads the write path, increases latency, couples audit storage to main DB performance |
+| Write to Redis Pub/Sub then consume | Redis Pub/Sub is fire-and-forget — consumer downtime = permanent audit gaps |
+
+The Transactional Outbox solves both:
 
 ```
-Current: In-memory emitter map (single node)
-    ↓
-Phase 1: Redis Pub/Sub fanout
-    - Task mutation publishes to Redis channel: project:{id}:events
-    - All API nodes subscribe and fan out to local SSE emitters
-    ↓
-Phase 2: Event replay support
-    - Store last N events per project in Redis stream
-    - Reconnecting clients request events since last-event-id
-    - Eliminates missed events on reconnect
+BEGIN TRANSACTION
+  ├── UPDATE tasks SET ...          ← main write
+  └── INSERT INTO outbox (payload)  ← atomic guarantee
+COMMIT
+
+OutboxWorker (@Scheduled every 1s):
+  ├── SELECT unprocessed outbox entries
+  ├── INSERT into task_activity_logs
+  └── Mark outbox entry processed
+      (on failure: log + skip → retry next tick)
 ```
+
+The task save and outbox insert are in the **same database transaction** — both commit or both roll back. The worker drains asynchronously, keeping the request path fast while guaranteeing no audit entry is ever lost.
+
+### What gets captured
+
+| Field | Description |
+|---|---|
+| `actor_type` | `USER`, `AI_AGENT`, or `SYSTEM` |
+| `action_type` | `CREATED`, `UPDATED`, `DELETED`, `STATUS_CHANGED`, `ASSIGNED` |
+| `old_value` | Full task snapshot before mutation (JSONB) |
+| `new_value` | Full task snapshot after mutation (JSONB) |
+| `changed_fields` | Array of field names that actually changed |
+| `conversation_id` | Phase 2: groups all mutations from one AI agent session |
+| `metadata` | Phase 2: agent tool call context, reasoning trace |
 
 ---
 
@@ -361,7 +440,7 @@ Client B must re-read, re-apply changes, and retry
 
 - **Higher throughput** — no blocking DB locks held between read and write
 - **Correct for low-contention workloads** — task edits are rarely concurrent on the same record; optimistic locking avoids unnecessary serialisation
-- **Failure is explicit** — the 409 response surface the conflict to the client cleanly, enabling retry logic
+- **Failure is explicit** — the 409 response surfaces the conflict to the client cleanly, enabling retry logic
 
 ---
 
@@ -383,6 +462,8 @@ Schema evolution is managed by **Flyway** — a versioned, migration-first appro
 3. `V3__create_tasks.sql` — Tasks table with optimistic lock columns
 4. `V4__seed_data.sql` — Local development seed data
 5. `V5__add_version_updated_at.sql` — Optimistic locking columns
+6. `V6__create_outbox.sql` — Transactional outbox table for async audit delivery
+7. `V7__create_task_activity_logs.sql` — Append-only audit log with field-level change tracking
 
 Flyway runs **automatically at application startup** — no manual migration step, no schema drift between environments.
 
@@ -431,8 +512,10 @@ TaskFlow uses **structured SLF4J/Logback logging** throughout the service layer 
 |---|---|
 | **Auth** | Registration, login success/failure |
 | **Projects** | Created, updated, deleted, fetched |
-| **Tasks** | Created, updated, deleted, conflict detected |
+| **Tasks** | Created, updated, deleted — with changed fields |
 | **SSE** | Subscription opened, event dispatched, emitter closed |
+| **Redis** | Publish failures, subscriber errors |
+| **Outbox Worker** | Processing errors, retry attempts |
 
 ### Why Structured Logging?
 
@@ -472,6 +555,7 @@ docker compose up --build
 |---|---|
 | REST API | `http://localhost:8080` |
 | PostgreSQL | `localhost:5433` |
+| Redis | `localhost:6379` |
 
 ### Environment Variables
 
@@ -484,6 +568,9 @@ JWT_SECRET=taskflow-super-secret-key-for-jwt-signing-123456
 JWT_EXPIRATION=86400000
 
 API_PORT=8080
+
+REDIS_HOST=localhost
+REDIS_PORT=6379
 ```
 
 > In a real production deployment, secrets would be injected via a secrets manager (AWS SSM, HashiCorp Vault) — never committed to version control.
@@ -520,8 +607,6 @@ A reusable Postman collection is available in `postman/TaskFlow.postman_collecti
 
 Screenshots demonstrating Postman API testing are available in the `screenshot_testing/` folder.
 
-
-
 ### Testing Philosophy
 
 Integration tests are run against a real embedded database — not mocked repositories. This validates the full stack (controller → service → repository → DB) including constraint enforcement, cascade behaviour, and migration correctness. Mocking the DB layer provides false confidence; integration tests catch the bugs that matter.
@@ -530,75 +615,27 @@ Integration tests are run against a real embedded database — not mocked reposi
 
 ## Engineering Tradeoffs & Future Roadmap
 
-### Current Scope Decisions
+### Phase 1 — Completed
 
 | Decision | Rationale |
 |---|---|
-| Single project owner | Keeps auth model simple and predictable; collaboration via RBAC is a Phase 2 concern |
-| In-memory SSE emitters | Correct for single-instance deployment; Redis Pub/Sub is a well-understood scale path |
-| No refresh token flow | JWT 24h TTL is appropriate for the assignment scope; refresh + blacklist adds ~2 days of complexity |
-| No soft delete | Simplifies queries; audit requirements would drive this decision in production |
+| Redis Pub/Sub for SSE fanout | Distributed real-time across multiple instances; fire-and-forget is acceptable for notifications |
+| Transactional Outbox over sync audit writes | Decouples audit persistence from the write path; guarantees delivery without blocking the request |
+| Outbox worker polls every 1s with `fixedDelay` | `fixedDelay` prevents worker overlap; 1s lag is acceptable for audit use cases |
+| `task_id` without FK in audit logs | Audit records must outlive the task — history persists even after deletion |
+| Same PostgreSQL for audit logs | Enables atomic outbox+task writes; pgvector in Phase 3 extends it naturally; Phase 4 ETL pipes it to Redshift for analytics |
 
-### Phase 2 Roadmap
+### Phase 2 Roadmap — AI Agent + MCP Server
 
-#### 1. Collaboration & RBAC
+A Claude-powered agent that drives the REST backend through natural language, with every action attributed in the audit log under `actor_type=AI_AGENT`. Exposed as an MCP server for ecosystem interoperability (Claude Desktop, Cursor, any AI client).
 
-Introduce a `project_members` join table with role-scoped permissions:
+### Phase 3 Roadmap — pgvector + Semantic Search
 
-```sql
-CREATE TABLE project_members (
-  project_id  UUID REFERENCES projects(id),
-  user_id     UUID REFERENCES users(id),
-  role        VARCHAR CHECK (role IN ('OWNER', 'ADMIN', 'EDITOR', 'VIEWER')),
-  PRIMARY KEY (project_id, user_id)
-);
-```
+pgvector extends PostgreSQL for semantic task search (embedding-based, no keyword matching) and cross-session agent memory via similarity search.
 
-This enables shared team workspaces with granular permission inheritance — task assignment, comment, status update — gated per role.
+### Phase 4 Roadmap — AWS Deployment + Analytical Data Layer
 
-#### 2. Async Notification Pipeline
-
-Replace synchronous SSE with a durable async event pipeline for email, push, and in-app alerts:
-
-```
-Task mutation → Kafka topic → Notification worker
-                                  ├── Email (SES / SendGrid)
-                                  ├── Push (FCM / APNs)
-                                  └── In-app (SSE / WebSocket)
-```
-
-This decouples the write path from notification delivery — mutations complete in microseconds regardless of notification fanout cost.
-
-#### 3. Distributed Real-Time Infrastructure
-
-```
-Phase 1 (current): In-memory emitter registry
-Phase 2: Redis Pub/Sub fanout across nodes
-Phase 3: WebSocket upgrade for bidirectional collaboration (comments, live cursors)
-Phase 4: Event replay via Redis Streams (reliable reconnect)
-```
-
-#### 4. Full Audit Trail
-
-Append-only task activity log for accountability and rollback visibility:
-
-```sql
-CREATE TABLE task_activity_logs (
-  id           UUID PRIMARY KEY,
-  task_id      UUID REFERENCES tasks(id),
-  user_id      UUID REFERENCES users(id),
-  action_type  VARCHAR,   -- STATUS_CHANGED, ASSIGNEE_CHANGED, etc.
-  old_value    JSONB,
-  new_value    JSONB,
-  created_at   TIMESTAMP
-);
-```
-
-#### 5. Production Observability Stack
-
-- **Micrometer + Prometheus** for request latency, error rates, and DB pool metrics
-- **OpenTelemetry + Jaeger** for distributed trace propagation
-- **Grafana dashboards** for SLO monitoring and capacity planning alerts
+ECS Fargate + RDS + ElastiCache + Redis on AWS via Terraform, GitHub Actions CI/CD with zero-downtime rolling deploys, and a Redshift + AWS Glue ETL pipeline pulling audit logs for analytical queries.
 
 ---
 
@@ -606,15 +643,18 @@ CREATE TABLE task_activity_logs (
 
 ```
 ✔  JWT stateless auth — horizontally scalable, session-free
-✔  BCrypt password hashing
+✔  BCrypt password hashing (strength 12)
 ✔  Clean layered architecture — no cross-layer leakage
 ✔  Project + task CRUD with ownership enforcement
-✔  SSE real-time push for TASK_CREATED / UPDATED / DELETED
+✔  Redis Pub/Sub distributed SSE — real-time fanout across multiple API instances
+✔  Transactional Outbox Pattern — guaranteed async audit delivery, zero message loss
+✔  Append-only audit log with field-level change detection and actor attribution
+✔  Audit history endpoints — queryable by task, project, actor type, actor ID
 ✔  Optimistic locking with 409 Conflict on concurrent writes
 ✔  Paginated, filterable list APIs — production-safe by design
 ✔  Project analytics endpoint (by status, by assignee)
-✔  Flyway versioned migrations with rollback support
-✔  Docker Compose one-command local setup
+✔  Flyway versioned migrations with rollback support (V1–V7)
+✔  Docker Compose one-command local setup (Postgres + Redis + API)
 ✔  Structured SLF4J logging throughout service layer
 ✔  Global exception handler with consistent error envelope
 ✔  83% instruction coverage · 13 integration tests passing
@@ -626,4 +666,4 @@ CREATE TABLE task_activity_logs (
 
 **Sreejit Chaudhury**
 
-Engineered with focus on production readiness, clean architecture, operational observability, and systems thinking.
+Engineered with focus on production readiness, clean architecture, distributed systems thinking, and operational observability.
